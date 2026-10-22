@@ -370,6 +370,52 @@ def test__templater_dbt_templating_test_lex(
     )
 
 
+def test__templater_dbt_generic_test_definition(
+    project_dir, dbt_templater, dbt_fluff_config
+):
+    """Lint a registered generic test definition without compiling a test node."""
+    path = Path(project_dir) / "tests/generic/test_not_empty.sql"
+    source = path.read_text()
+    config = FluffConfig(configs=dbt_fluff_config)
+
+    templated_file, violations = dbt_templater.process(
+        in_str=source, fname=str(path), config=config
+    )
+
+    assert not violations
+    assert templated_file.fname == str(path.resolve())
+    assert templated_file.source_str == source
+    assert templated_file.templated_str == ""
+    assert templated_file.raw_sliced
+    assert templated_file.sliced_file
+
+
+def test__templater_dbt_generic_test_definition_symlink(tmp_path):
+    """Only registered test macros are treated as definitions, even via symlinks."""
+    real = tmp_path / "package" / "tests" / "generic"
+    real.mkdir(parents=True)
+    path = real / "test_is_valid.sql"
+    path.write_text("{% test is_valid(model) %}select 1{% endtest %}")
+    linked = tmp_path / "dbt_packages" / "package"
+    linked.parent.mkdir()
+    linked.symlink_to(real.parent.parent, target_is_directory=True)
+
+    templater = DbtTemplater()
+    templater.project_dir = str(tmp_path)
+    macro = mock.Mock(
+        original_file_path="dbt_packages/package/tests/generic/test_is_valid.sql",
+    )
+    macro.name = "test_is_valid"
+    templater.__dict__["dbt_manifest"] = mock.Mock(macros={"test": macro})
+
+    assert templater._is_generic_test_definition(str(path), path.read_text())
+    assert not templater._is_generic_test_definition(
+        str(path), "{% macro test_is_valid(model) %}select 1{% endmacro %}"
+    )
+    macro.name = "test_other"
+    assert not templater._is_generic_test_definition(str(path), path.read_text())
+
+
 @pytest.mark.parametrize(
     "path,reason",
     [

@@ -3,6 +3,7 @@
 import os
 import os.path
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +30,28 @@ def test__linter__skip_file(path, project_dir, dbt_fluff_config):
     assert os.path.normpath(linted_file.path) == os.path.normpath(model_file_path)
     assert not linted_file.templated_file
     assert not linted_file.tree
+
+
+def test__linter__generic_test_definition(project_dir, dbt_fluff_config):
+    """Lint generic test source with dbt and report its missing final newline."""
+    path = Path(project_dir) / "tests/generic/test_not_empty.sql"
+    source = path.read_text()
+    conf = FluffConfig(configs=dbt_fluff_config)
+    linter = Linter(config=conf)
+
+    linted = linter.lint_path(path=str(path))
+
+    assert linter.templater.name == "dbt"
+    assert len(linted.files) == 1
+    linted_file = linted.files[0]
+    assert linted_file.templated_file
+    assert linted_file.templated_file.source_str == source
+    assert not [v for v in linted_file.get_violations() if v.rule_code() == "TMP"]
+    newline_violations = [
+        v for v in linted_file.get_violations() if v.rule_code() == "LT12"
+    ]
+    assert len(newline_violations) == 1
+    assert newline_violations[0].line_no == len(source.splitlines())
 
 
 def test__linter__lint_ephemeral_3_level(project_dir, dbt_fluff_config):

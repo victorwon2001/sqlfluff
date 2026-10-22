@@ -12,6 +12,7 @@ DbtTemplater class and so are only imported when necessary.
 import logging
 import os
 import os.path
+import re
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -166,6 +167,13 @@ def handle_dbt_errors(
         return wrapped_method
 
     return decorator
+
+
+class _DbtGenericTestJinjaTemplater(JinjaTemplater):
+    """Render generic test definitions with dbt's Jinja test tag enabled."""
+
+    def _apply_dbt_builtins(self, config: Optional["FluffConfig"]) -> bool:
+        return True
 
 
 class DbtTemplater(JinjaTemplater):
@@ -564,11 +572,39 @@ class DbtTemplater(JinjaTemplater):
         self.dbt_skip_compilation_error = self._get_dbt_skip_compilation_error()
         fname_absolute_path = os.path.abspath(fname) if fname != "stdin" else fname
 
+        if in_str is not None and self._is_generic_test_definition(
+            fname_absolute_path, in_str
+        ):
+            # A generic test is a macro definition, not a compilable dbt node.
+            # Keep its source slices so lint rules can check the definition.
+            return _DbtGenericTestJinjaTemplater().process(
+                fname=fname_absolute_path,
+                in_str=in_str,
+                config=config,
+                formatter=formatter,
+            )
+
         # NOTE: dbt exceptions are caught and handled safely for pickling by the outer
         # `handle_dbt_errors` decorator.
         return self._unsafe_process(
             fname_absolute_path, in_str, config, self.project_dir
         )
+
+    def _is_generic_test_definition(self, fname: str, in_str: str) -> bool:
+        """Identify generic test macros registered for this source file by dbt."""
+        definitions = set(re.findall(r"{%-?\s*test\s+(\w+)\s*\(", in_str))
+        if not definitions:
+            return False
+        source_path = Path(fname).resolve()
+        for macro in self.dbt_manifest.macros.values():
+            if (
+                macro.name.startswith("test_")
+                and macro.name[5:] in definitions
+                and (Path(self.project_dir) / macro.original_file_path).resolve()
+                == source_path
+            ):
+                return True
+        return False
 
     def _find_node(self, fname, config=None, dbt_dir=os.getcwd()):
         if not config:  # pragma: no cover
